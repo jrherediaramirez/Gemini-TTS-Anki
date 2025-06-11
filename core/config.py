@@ -65,7 +65,6 @@ class ConfigDialog(QDialog):
     This dialog allows users to configure:
     - API key and connection testing
     - Voice selection from available options
-    - Target field for audio insertion
     - Temperature setting for voice variation
     - Cache settings and management
     """
@@ -126,11 +125,6 @@ class ConfigDialog(QDialog):
         self.voice_combo.addItems(voices)
         form.addRow("Voice:", self.voice_combo)
         
-        # Target field input
-        self.field_input = QLineEdit()
-        self.field_input.setPlaceholderText("Field name for audio")
-        form.addRow("Target Field:", self.field_input)
-        
         # Temperature setting (voice variation)
         self.temp_spinner = QDoubleSpinBox()
         self.temp_spinner.setRange(0.0, 1.0)
@@ -178,7 +172,9 @@ class ConfigDialog(QDialog):
             "<b>How to get API key:</b><br>"
             "1. Visit <a href='https://ai.google.dev/'>ai.google.dev</a><br>"
             "2. Click 'Get API key' then 'Create API key'<br>"
-            "3. Copy and paste the key above"
+            "3. Copy and paste the key above<br><br>"
+            "<b>Audio Placement:</b><br>"
+            "Audio will be automatically added to the field you're editing"
         )
         
         # Configure info label appearance and behavior
@@ -271,7 +267,6 @@ class ConfigDialog(QDialog):
             self.voice_combo.setCurrentIndex(voice_index)
         
         # Load other settings
-        self.field_input.setText(config.get("target_field", "Front"))
         self.temp_spinner.setValue(config.get("temperature", 0.0))
         self.cache_enabled.setChecked(config.get("enable_cache", True))
         self.cache_days.setValue(config.get("cache_days", 30))
@@ -280,22 +275,16 @@ class ConfigDialog(QDialog):
         """Validate and save configuration settings."""
         # Get values from form
         api_key = self.api_key_input.text().strip()
-        target_field = self.field_input.text().strip()
         
         # Validate required fields
         if not api_key:
             QMessageBox.warning(self, "Error", "API key is required")
             return
         
-        if not target_field:
-            QMessageBox.warning(self, "Error", "Target field name is required")
-            return
-        
         # Create configuration dictionary
         new_config = {
             "api_key": api_key,
             "voice": self.voice_combo.currentText(),
-            "target_field": target_field,
             "temperature": self.temp_spinner.value(),
             "enable_cache": self.cache_enabled.isChecked(),
             "cache_days": self.cache_days.value()

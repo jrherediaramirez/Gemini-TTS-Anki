@@ -11,6 +11,7 @@ Features:
 - Multi-language support for all Unicode text
 - Intelligent caching to reduce API costs
 - Secure file operations within Anki's media directory
+- Automatic field detection for audio placement
 """
 
 import os
@@ -42,6 +43,7 @@ class GeminiTTS:
     - Audio generation via Gemini API
     - Caching system for cost optimization
     - Integration with Anki's editor
+    - Automatic field detection for audio placement
     """
     
     def __init__(self):
@@ -65,7 +67,6 @@ class GeminiTTS:
         defaults = {
             "api_key": "",              # User's Gemini API key
             "voice": "Zephyr",          # Default voice (gentle and flowing)
-            "target_field": "Front",    # Field to add audio (works for most note types)
             "enable_cache": True,       # Enable caching to reduce API costs
             "cache_days": 30,          # Keep cached audio for 30 days
             "temperature": 0.0         # Deterministic output (0.0-1.0 range)
@@ -98,6 +99,33 @@ class GeminiTTS:
         
         # Update current configuration
         self.config = config
+    
+    # ========================================================================
+    # FIELD DETECTION
+    # ========================================================================
+    
+    def detect_source_field(self, editor):
+        """
+        Detect which field the user is currently working in.
+        
+        Args:
+            editor: Anki editor instance
+            
+        Returns:
+            Field name where audio should be placed
+        """
+        if not (editor and hasattr(editor, 'note') and editor.note):
+            return "Front"
+        
+        # Use editor.currentField index to determine active field
+        if hasattr(editor, 'currentField') and editor.currentField is not None:
+            field_names = list(editor.note.keys())
+            if 0 <= editor.currentField < len(field_names):
+                return field_names[editor.currentField]
+        
+        # Fallback: Return first available field
+        field_names = list(editor.note.keys())
+        return field_names[0] if field_names else "Front"
     
     # ========================================================================
     # CACHE MANAGEMENT SYSTEM
@@ -477,7 +505,7 @@ class GeminiTTS:
     
     def add_audio_to_note(self, editor, filename: str):
         """
-        Add generated audio to the target field in Anki note.
+        Add generated audio to the detected source field in Anki note.
         
         Args:
             editor: Anki editor instance
@@ -486,7 +514,7 @@ class GeminiTTS:
         Returns:
             True if successful, False otherwise
         """
-        target_field = self.config.get("target_field", "Front")
+        target_field = self.detect_source_field(editor)
         
         # Check if target field exists in current note type
         if target_field not in editor.note:
@@ -562,6 +590,83 @@ class GeminiTTS:
         return buttons
     
     # ========================================================================
+    # TEXT PROCESSING AND NORMALIZATION
+    # ========================================================================
+    
+    def normalize_text(self, text: str) -> str:
+        """
+        Clean and normalize text for TTS processing.
+        
+        Args:
+            text: Raw text from editor selection
+            
+        Returns:
+            Cleaned text suitable for TTS API
+        """
+        if not text:
+            return ""
+        
+        # Remove HTML tags
+        import re
+        text = re.sub(r'<[^>]+>', '', text)
+        
+        # Convert HTML entities
+        html_entities = {
+            '&nbsp;': ' ',
+            '&amp;': '&',
+            '&lt;': '<',
+            '&gt;': '>',
+            '&quot;': '"',
+            '&#39;': "'",
+            '&mdash;': '—',
+            '&ndash;': '–'
+        }
+        for entity, replacement in html_entities.items():
+            text = text.replace(entity, replacement)
+        
+        # Handle bullet points and list markers
+        bullet_patterns = [
+            r'^[\s]*[•·‣⁃▪▫‧◦⦾⦿]\s*',  # Various bullet characters
+            r'^[\s]*[-*+]\s*',           # Dash/asterisk bullets
+            r'^[\s]*\d+[.)]\s*',         # Numbered lists
+            r'^[\s]*[a-zA-Z][.)]\s*',    # Lettered lists
+        ]
+        
+        lines = text.split('\n')
+        cleaned_lines = []
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+                
+            # Remove bullet point prefixes
+            for pattern in bullet_patterns:
+                line = re.sub(pattern, '', line, flags=re.MULTILINE)
+                line = line.strip()
+            
+            if line:  # Only add non-empty lines
+                cleaned_lines.append(line)
+        
+        # Join lines with appropriate spacing
+        text = ' '.join(cleaned_lines)
+        
+        # Normalize whitespace
+        text = re.sub(r'\s+', ' ', text)  # Multiple spaces -> single space
+        text = text.strip()
+        
+        # Remove or replace problematic characters
+        text = text.replace('\u00a0', ' ')  # Non-breaking space
+        text = text.replace('\u2000', ' ')  # En quad
+        text = text.replace('\u2001', ' ')  # Em quad
+        text = text.replace('\u2002', ' ')  # En space
+        text = text.replace('\u2003', ' ')  # Em space
+        text = text.replace('\u2009', ' ')  # Thin space
+        text = text.replace('\u200b', '')   # Zero-width space
+        
+        return text
+    
+    # ========================================================================
     # USER INTERACTION HANDLERS
     # ========================================================================
     
@@ -572,11 +677,58 @@ class GeminiTTS:
         Args:
             editor: Anki editor instance
         """
-        # Get selected text from editor
-        editor.web.evalWithCallback(
-            "getSelection().toString()",
-            partial(self.process_selected_text, editor)
-        )
+        # Enhanced text extraction with HTML content fallback
+        js_code = """
+        (function() {
+            const selection = window.getSelection();
+            if (selection.rangeCount > 0) {
+                const range = selection.getRangeAt(0);
+                const container = document.createElement('div');
+                container.appendChild(range.cloneContents());
+                return {
+                    plainText: selection.toString(),
+                    htmlContent: container.innerHTML,
+                    hasContent: selection.toString().length > 0
+                };
+            }
+            return {
+                plainText: '',
+                htmlContent: '',
+                hasContent: false
+            };
+        })();
+        """
+        
+        editor.web.evalWithCallback(js_code, partial(self.process_selection_result, editor))
+    
+    def process_selection_result(self, editor, result):
+        """
+        Process the selection result from JavaScript.
+        
+        Args:
+            editor: Anki editor instance
+            result: Selection data from JavaScript
+        """
+        if not result.get('hasContent', False):
+            tooltip("Please select some text first")
+            return
+        
+        # Try plain text first, fall back to HTML content if needed
+        raw_text = result.get('plainText', '') or result.get('htmlContent', '')
+        
+        if not raw_text.strip():
+            tooltip("No readable text found in selection")
+            return
+        
+        # Clean and normalize the text
+        cleaned_text = self.normalize_text(raw_text)
+        
+        if not cleaned_text.strip():
+            tooltip("Selected text cannot be converted to speech")
+            return
+        
+        # Proceed with TTS generation
+        self.process_selected_text(editor, cleaned_text)
     
     def process_selected_text(self, editor, selected_text):
         """
@@ -584,15 +736,8 @@ class GeminiTTS:
         
         Args:
             editor: Anki editor instance
-            selected_text: Text selected by user
+            selected_text: Cleaned text for TTS
         """
-        selected_text = selected_text.strip()
-        
-        # Validate that text is selected
-        if not selected_text:
-            tooltip("Please select some text first")
-            return
-        
         # Validate that API key is configured
         if not self.config.get("api_key", "").strip():
             tooltip("Please configure API key first")

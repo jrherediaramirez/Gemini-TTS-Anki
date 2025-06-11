@@ -20,7 +20,6 @@ from aqt.qt import QAction
 # ============================================================================
 
 # Global TTS engine instance - initialized when profile loads
-# Using 'tts_instance' to avoid naming conflicts with imports
 tts_instance = None
 
 # ============================================================================
@@ -130,4 +129,4 @@ except Exception as e:
 
 __version__ = "2.0.0"
 __author__ = "Jesus Heredia Ramirez"
-__description__ = "Professional TTS for Anki using Google Gemini API"
+__description__ = "Professional TTS for Anki using Google Gemini API with automatic field detection"
