@@ -4,10 +4,11 @@ Gemini TTS Configuration Dialog
 ===============================
 
 User interface for configuring TTS settings including API key setup,
-voice selection, and cache management.
+model selection, voice selection, and cache management.
 
 Features:
 - API key validation and testing
+- Model selection (Flash vs Pro)
 - Voice selection from available options
 - Cache management controls
 - User-friendly error handling
@@ -66,6 +67,7 @@ class ConfigDialog(QDialog):
     
     This dialog allows users to configure:
     - API key and connection testing
+    - Model selection (Flash vs Pro)
     - Voice selection from available options
     - Temperature setting for voice variation
     - Cache settings and management
@@ -120,6 +122,13 @@ class ConfigDialog(QDialog):
         self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.api_key_input.setPlaceholderText("Enter your Gemini API key")
         form.addRow("API Key:", self.api_key_input)
+        
+        # Model selection dropdown
+        self.model_combo = QComboBox()
+        models = self.tts.get_available_models()
+        for model_key, model_info in models.items():
+            self.model_combo.addItem(model_info["display_name"], model_key)
+        form.addRow("Model:", self.model_combo)
         
         # Voice selection dropdown
         self.voice_combo = QComboBox()
@@ -262,6 +271,12 @@ class ConfigDialog(QDialog):
         # Load API key
         self.api_key_input.setText(config.get("api_key", ""))
         
+        # Load and set model selection
+        model_key = config.get("model", "flash")
+        model_index = self.model_combo.findData(model_key)
+        if model_index >= 0:
+            self.model_combo.setCurrentIndex(model_index)
+        
         # Load and set voice selection
         voice = config.get("voice", "Zephyr")
         voice_index = self.voice_combo.findText(voice)
@@ -283,9 +298,13 @@ class ConfigDialog(QDialog):
             QMessageBox.warning(self, "Error", "API key is required")
             return
         
+        # Get selected model key
+        model_key = self.model_combo.currentData()
+        
         # Create configuration dictionary
         new_config = {
             "api_key": api_key,
+            "model": model_key,
             "voice": self.voice_combo.currentText(),
             "temperature": self.temp_spinner.value(),
             "enable_cache": self.cache_enabled.isChecked(),
@@ -306,7 +325,7 @@ class ConfigDialog(QDialog):
     # ========================================================================
     
     def test_api_key(self):
-        """Test the entered API key with a simple TTS request."""
+        """Test the entered API key with current settings."""
         api_key = self.api_key_input.text().strip()
         
         # Validate API key is entered
@@ -314,11 +333,17 @@ class ConfigDialog(QDialog):
             QMessageBox.warning(self, "Error", "Please enter an API key first")
             return
         
+        # Get current form values for testing
+        model_key = self.model_combo.currentData()
+        voice = self.voice_combo.currentText()
+        temperature = self.temp_spinner.value()
+        
         # Use current TTS instance for testing with temporary config
         test_config = self.tts.config.copy()
         test_config["api_key"] = api_key
-        test_config["voice"] = self.voice_combo.currentText()
-        test_config["temperature"] = self.temp_spinner.value()
+        test_config["model"] = model_key
+        test_config["voice"] = voice
+        test_config["temperature"] = temperature
         
         # Temporarily update config for test
         original_config = self.tts.config
@@ -333,7 +358,8 @@ class ConfigDialog(QDialog):
             if len(audio_data) > 1000:
                 QMessageBox.information(
                     self, "Success", 
-                    f"API key is working. Generated {len(audio_data):,} bytes of audio data."
+                    f"API key is working with {model_key.title()} model and {voice} voice. "
+                    f"Generated {len(audio_data):,} bytes of audio data."
                 )
             else:
                 QMessageBox.warning(

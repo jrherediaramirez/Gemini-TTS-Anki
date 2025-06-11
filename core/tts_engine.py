@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-Gemini TTS Engine - FIXED VERSION
-=================================
+Gemini TTS Engine - Enhanced with Model Selection
+=================================================
 
 Main TTS engine using direct HTTP requests to Google's Gemini API.
-Handles audio generation, caching, and integration with Anki's editor.
+Handles audio generation, caching, model selection, and integration with Anki's editor.
 
-FIXES APPLIED:
-- Race condition in cache writes (atomic writes)
-- Manual HTML entity replacement (html.unescape)
-- Inefficient cache cleanup (metadata tracking)
+ENHANCEMENTS:
+- Model selection (Flash vs Pro)
+- Voice validation
+- Enhanced editor UI with model and voice dropdowns
 """
 
 import os
@@ -21,13 +21,13 @@ import struct
 import urllib.request
 import urllib.parse
 import urllib.error
-import html  # FIXED: Use standard library for HTML entity replacement
+import html
 import tempfile
 from typing import Optional, Dict, Any
 from functools import partial
 
 from aqt import mw
-from aqt.qt import QTimer
+from aqt.qt import QTimer, QComboBox, QHBoxLayout, QLabel
 from aqt.utils import tooltip
 
 # ============================================================================
@@ -36,7 +36,7 @@ from aqt.utils import tooltip
 
 class GeminiTTS:
     """
-    Main TTS engine class with race condition and optimization fixes.
+    Main TTS engine class with model selection and enhanced UI.
     """
     
     def __init__(self):
@@ -55,6 +55,7 @@ class GeminiTTS:
         """Load configuration from Anki with sensible defaults."""
         defaults = {
             "api_key": "",
+            "model": "flash",
             "voice": "Zephyr",
             "enable_cache": True,
             "cache_days": 30,
@@ -78,6 +79,55 @@ class GeminiTTS:
         self.config = config
     
     # ========================================================================
+    # MODEL AND VOICE MANAGEMENT
+    # ========================================================================
+    
+    def get_available_models(self) -> Dict[str, Dict[str, str]]:
+        """Get available TTS models with their metadata."""
+        return {
+            "flash": {
+                "model_id": "gemini-2.5-flash-preview-tts",
+                "display_name": "Gemini 2.5 Flash",
+                "description": "Fast and cost-effective"
+            },
+            "pro": {
+                "model_id": "gemini-2.5-pro-preview-tts",
+                "display_name": "Gemini 2.5 Pro", 
+                "description": "Higher quality audio"
+            }
+        }
+    
+    def get_current_model_id(self) -> str:
+        """Get the full model ID for the currently selected model."""
+        models = self.get_available_models()
+        model_key = self.config.get("model", "flash")
+        return models[model_key]["model_id"]
+    
+    def get_available_voices(self):
+        """Get list of available Gemini TTS voices."""
+        return [
+            "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Aoede",
+            "Callirhoe", "Autonoe", "Enceladus", "Iapetus", "Umbriel", "Algieba", 
+            "Despina", "Erinome", "Algenib", "Rasalgethi", "Laomedeia", "Achernar",
+            "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird", "Zubenelgenubi",
+            "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat"
+        ]
+    
+    def validate_current_settings(self) -> tuple[bool, str]:
+        """
+        Validate current model and voice settings.
+        
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        try:
+            # Test with minimal text
+            test_audio = self.generate_audio_http("test")
+            return len(test_audio) > 1000, ""
+        except Exception as e:
+            return False, str(e)
+    
+    # ========================================================================
     # FIELD DETECTION
     # ========================================================================
     
@@ -95,37 +145,28 @@ class GeminiTTS:
         return field_names[0] if field_names else "Front"
     
     # ========================================================================
-    # CACHE METADATA MANAGEMENT (OPTIMIZATION FIX)
+    # CACHE METADATA MANAGEMENT
     # ========================================================================
     
     def load_cache_metadata(self) -> Dict[str, Any]:
-        """
-        Load cache metadata for efficient cleanup.
-        
-        Returns:
-            Metadata dictionary with file tracking info
-        """
+        """Load cache metadata for efficient cleanup."""
         if not os.path.exists(self.cache_metadata_file):
             return {"version": "1.0", "files": {}}
         
         try:
             with open(self.cache_metadata_file, 'r', encoding='utf-8') as f:
                 metadata = json.load(f)
-                # Ensure proper structure
                 if "files" not in metadata:
                     metadata["files"] = {}
                 return metadata
         except (json.JSONDecodeError, OSError):
-            # Return empty metadata if file is corrupted
             return {"version": "1.0", "files": {}}
     
     def save_cache_metadata(self):
         """Save cache metadata to disk."""
         try:
-            # Ensure directory exists
             os.makedirs(os.path.dirname(self.cache_metadata_file), exist_ok=True)
             
-            # Write atomically using temporary file
             temp_fd, temp_path = tempfile.mkstemp(
                 dir=os.path.dirname(self.cache_metadata_file),
                 prefix='.metadata_tmp_'
@@ -135,11 +176,9 @@ class GeminiTTS:
                 with os.fdopen(temp_fd, 'w', encoding='utf-8') as f:
                     json.dump(self.cache_metadata, f, indent=2)
                 
-                # Atomic rename
                 os.rename(temp_path, self.cache_metadata_file)
                 
             except:
-                # Cleanup temp file on error
                 try:
                     os.unlink(temp_path)
                 except:
@@ -147,16 +186,10 @@ class GeminiTTS:
                 raise
                 
         except OSError:
-            # Silently fail if metadata can't be saved
             pass
     
     def track_cache_file(self, cache_key: str):
-        """
-        Track a cache file in metadata.
-        
-        Args:
-            cache_key: MD5 hash key for the cached file
-        """
+        """Track a cache file in metadata."""
         filename = f"{cache_key}.wav"
         current_time = time.time()
         
@@ -168,12 +201,7 @@ class GeminiTTS:
         self.save_cache_metadata()
     
     def update_cache_access(self, cache_key: str):
-        """
-        Update access time for cache file.
-        
-        Args:
-            cache_key: MD5 hash key for the accessed file
-        """
+        """Update access time for cache file."""
         filename = f"{cache_key}.wav"
         
         if filename in self.cache_metadata["files"]:
@@ -181,7 +209,7 @@ class GeminiTTS:
             self.save_cache_metadata()
     
     # ========================================================================
-    # CACHE MANAGEMENT SYSTEM (WITH FIXES)
+    # CACHE MANAGEMENT SYSTEM
     # ========================================================================
     
     def create_cache_dir(self):
@@ -193,22 +221,14 @@ class GeminiTTS:
         except OSError:
             pass
     
-    def get_cache_key(self, text: str, voice: str) -> str:
-        """Generate unique cache key for text and voice combination."""
+    def get_cache_key(self, text: str, voice: str, model: str) -> str:
+        """Generate unique cache key for text, voice, and model combination."""
         normalized_text = text.strip().lower()
-        content = f"{normalized_text}:{voice}:{self.config.get('temperature', 0.0)}"
+        content = f"{normalized_text}:{voice}:{model}:{self.config.get('temperature', 0.0)}"
         return hashlib.md5(content.encode('utf-8')).hexdigest()
     
     def get_cached_audio(self, cache_key: str) -> Optional[str]:
-        """
-        Check if audio is cached and not expired (OPTIMIZED).
-        
-        Args:
-            cache_key: MD5 hash key for cached audio
-            
-        Returns:
-            Filename if cached audio exists and is valid, None otherwise
-        """
+        """Check if audio is cached and not expired."""
         if not self.config.get("enable_cache", True):
             return None
         
@@ -217,7 +237,7 @@ class GeminiTTS:
         if not cache_file.startswith(self.cache_dir):
             return None
         
-        # Check metadata first (OPTIMIZATION: avoid file system calls)
+        # Check metadata first
         filename = f"{cache_key}.wav"
         if filename in self.cache_metadata["files"]:
             file_info = self.cache_metadata["files"][filename]
@@ -261,13 +281,7 @@ class GeminiTTS:
             return None
     
     def cache_audio(self, cache_key: str, audio_data: bytes):
-        """
-        Cache audio data to disk with atomic writes (RACE CONDITION FIX).
-        
-        Args:
-            cache_key: MD5 hash key for caching
-            audio_data: WAV audio data to cache
-        """
+        """Cache audio data to disk with atomic writes."""
         if not self.config.get("enable_cache", True):
             return
         
@@ -277,7 +291,6 @@ class GeminiTTS:
             return
         
         try:
-            # RACE CONDITION FIX: Use atomic writes with temporary file
             temp_fd, temp_path = tempfile.mkstemp(
                 dir=self.cache_dir,
                 prefix=f'.cache_tmp_{cache_key[:8]}_',
@@ -285,18 +298,13 @@ class GeminiTTS:
             )
             
             try:
-                # Write to temporary file
                 with os.fdopen(temp_fd, 'wb') as f:
                     f.write(audio_data)
                 
-                # Atomic rename to final location
                 os.rename(temp_path, cache_file)
-                
-                # Track in metadata
                 self.track_cache_file(cache_key)
                 
             except:
-                # Cleanup temp file on error
                 try:
                     os.unlink(temp_path)
                 except:
@@ -304,16 +312,10 @@ class GeminiTTS:
                 raise
                 
         except OSError:
-            # Silently fail if we can't write to cache
             pass
     
     def cleanup_cache(self) -> int:
-        """
-        Clean up expired cache files (OPTIMIZED with metadata).
-        
-        Returns:
-            Number of files cleaned up
-        """
+        """Clean up expired cache files."""
         if not os.path.exists(self.cache_dir):
             return 0
         
@@ -321,7 +323,6 @@ class GeminiTTS:
         max_age = self.config.get("cache_days", 30) * 24 * 3600
         current_time = time.time()
         
-        # OPTIMIZATION: Check metadata first, only access filesystem when necessary
         files_to_remove = []
         
         for filename, file_info in self.cache_metadata["files"].items():
@@ -329,7 +330,6 @@ class GeminiTTS:
             if file_age > max_age:
                 files_to_remove.append(filename)
         
-        # Remove expired files
         for filename in files_to_remove:
             file_path = os.path.join(self.cache_dir, filename)
             try:
@@ -339,17 +339,15 @@ class GeminiTTS:
             except OSError:
                 pass
             
-            # Remove from metadata
             if filename in self.cache_metadata["files"]:
                 del self.cache_metadata["files"][filename]
         
-        # Clean up orphaned temporary files (from failed atomic writes)
+        # Clean up orphaned temporary files
         try:
             for filename in os.listdir(self.cache_dir):
                 if filename.startswith('.cache_tmp_') and filename.endswith('.wav'):
                     temp_path = os.path.join(self.cache_dir, filename)
                     try:
-                        # Remove temp files older than 1 hour
                         if current_time - os.path.getmtime(temp_path) > 3600:
                             os.remove(temp_path)
                             cleaned += 1
@@ -358,7 +356,6 @@ class GeminiTTS:
         except OSError:
             pass
         
-        # Save updated metadata
         if files_to_remove:
             self.save_cache_metadata()
         
@@ -374,11 +371,12 @@ class GeminiTTS:
         if not api_key:
             raise ValueError("API key not configured")
         
+        model_id = self.get_current_model_id()
         voice = self.config.get("voice", "Zephyr")
         temperature = self.config.get("temperature", 0.0)
         
         url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-               f"gemini-2.5-flash-preview-tts:generateContent?key={api_key}")
+               f"{model_id}:generateContent?key={api_key}")
         
         payload = {
             "contents": [{"parts": [{"text": text}]}],
@@ -478,7 +476,9 @@ class GeminiTTS:
         if len(text) > 5000:
             raise ValueError("Text too long (max 5000 characters)")
         
-        cache_key = self.get_cache_key(text, self.config.get("voice", "Zephyr"))
+        model_key = self.config.get("model", "flash")
+        voice = self.config.get("voice", "Zephyr")
+        cache_key = self.get_cache_key(text, voice, model_key)
         cached_filename = self.get_cached_audio(cache_key)
         if cached_filename:
             return cached_filename
@@ -500,19 +500,11 @@ class GeminiTTS:
         return filename
     
     # ========================================================================
-    # TEXT PROCESSING AND NORMALIZATION (HTML ENTITY FIX)
+    # TEXT PROCESSING AND NORMALIZATION
     # ========================================================================
     
     def normalize_text(self, text: str) -> str:
-        """
-        Clean and normalize text for TTS processing (FIXED HTML entities).
-        
-        Args:
-            text: Raw text from editor selection
-            
-        Returns:
-            Cleaned text suitable for TTS API
-        """
+        """Clean and normalize text for TTS processing."""
         if not text:
             return ""
         
@@ -520,7 +512,7 @@ class GeminiTTS:
         import re
         text = re.sub(r'<[^>]+>', '', text)
         
-        # FIXED: Use html.unescape() instead of manual dictionary
+        # Unescape HTML entities
         text = html.unescape(text)
         
         # Handle bullet points and list markers
@@ -601,20 +593,110 @@ class GeminiTTS:
             icon_path = os.path.join(addon_dir, "icons", "gemini.png")
             use_icon = icon_path if os.path.exists(icon_path) else None
             
+            # Create main TTS button with current settings in tooltip
+            current_model = self.get_available_models()[self.config.get("model", "flash")]["display_name"]
+            current_voice = self.config.get("voice", "Zephyr")
+            tip = f"Generate Gemini TTS (Ctrl+G)\nModel {current_model}\nVoice {current_voice}"
+            
             button = editor.addButton(
                 icon=use_icon,
                 cmd="gemini_tts",
-                tip="Generate Gemini TTS (Ctrl+G)",
+                tip=tip,
                 func=lambda ed: self.on_button_click(ed),
                 keys="Ctrl+G"
             )
             
+            # Add model selection button
+            model_button = editor.addButton(
+                None,
+                cmd="gemini_model",
+                tip=f"Select Gemini TTS Model (Current: {current_model})",
+                func=lambda ed: self.show_model_menu(ed),
+                label="Model"
+            )
+            
+            # Add voice selection button  
+            voice_button = editor.addButton(
+                None,
+                cmd="gemini_voice", 
+                tip=f"Select Gemini TTS Voice (Current: {current_voice})",
+                func=lambda ed: self.show_voice_menu(ed),
+                label="Voice"
+            )
+            
             buttons.append(button)
+            buttons.append(model_button)
+            buttons.append(voice_button)
             
         except Exception as e:
             print(f"Gemini TTS: Button setup error - {e}")
         
         return buttons
+    
+    def show_model_menu(self, editor):
+        """Show model selection menu."""
+        from aqt.qt import QMenu, QCursor
+        
+        menu = QMenu(editor.widget)
+        models = self.get_available_models()
+        current_model = self.config.get("model", "flash")
+        
+        for model_key, model_info in models.items():
+            action = menu.addAction(model_info["display_name"])
+            action.setCheckable(True)
+            action.setChecked(model_key == current_model)
+            action.triggered.connect(lambda checked, mk=model_key: self.change_model(mk, editor))
+        
+        # Show menu at mouse cursor position
+        menu.exec(QCursor.pos())
+    
+    def show_voice_menu(self, editor):
+        """Show voice selection menu."""
+        from aqt.qt import QMenu, QCursor
+        
+        menu = QMenu(editor.widget)
+        voices = self.get_available_voices()
+        current_voice = self.config.get("voice", "Zephyr")
+        
+        for voice in voices:
+            action = menu.addAction(voice)
+            action.setCheckable(True)
+            action.setChecked(voice == current_voice)
+            action.triggered.connect(lambda checked, v=voice: self.change_voice(v, editor))
+        
+        # Show menu at mouse cursor position
+        menu.exec(QCursor.pos())
+    
+    def change_model(self, model_key, editor):
+        """Change model and update button label."""
+        config = self.config.copy()
+        config["model"] = model_key
+        self.save_config(config)
+        tooltip(f"Model changed to {self.get_available_models()[model_key]['display_name']}")
+    
+    def change_voice(self, voice, editor):
+        """Change voice and update button label."""
+        config = self.config.copy()
+        config["voice"] = voice
+        self.save_config(config)
+        tooltip(f"Voice changed to {voice}")
+    
+    def on_model_changed(self, combo):
+        """Handle model selection change."""
+        model_key = combo.currentData()
+        if model_key:
+            config = self.config.copy()
+            config["model"] = model_key
+            self.save_config(config)
+    
+    def on_voice_changed(self, combo):
+        """Handle voice selection change."""
+        voice_text = combo.currentText()
+        if voice_text.startswith("Voice: "):
+            voice = voice_text[7:]  # Remove "Voice: " prefix
+            config = self.config.copy()
+            config["voice"] = voice
+            self.save_config(config)
     
     # ========================================================================
     # USER INTERACTION HANDLERS
@@ -680,7 +762,9 @@ class GeminiTTS:
             filename = self.generate_audio(text)
             
             if self.add_audio_to_note(editor, filename):
-                tooltip("Audio generated successfully")
+                current_model = self.get_available_models()[self.config.get("model", "flash")]["display_name"]
+                current_voice = self.config.get("voice", "Zephyr")
+                tooltip(f"Audio generated with {current_model} - {current_voice}")
             else:
                 tooltip("Failed to add audio to note")
                 
@@ -695,17 +779,3 @@ class GeminiTTS:
                 tooltip("Network error - check connection")
             else:
                 tooltip(f"Error: {error_msg[:50]}...")
-    
-    # ========================================================================
-    # UTILITY METHODS
-    # ========================================================================
-    
-    def get_available_voices(self):
-        """Get list of available Gemini TTS voices."""
-        return [
-            "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Aoede",
-            "Callirrhoe", "Autonoe", "Enceladus", "Iapetus", "Umbriel", "Algieba",
-            "Despina", "Erinome", "Algenib", "Rasalgethi", "Laomedeia", "Achernar",
-            "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird", "Zubenelgenubi",
-            "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat"
-        ]
