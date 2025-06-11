@@ -1,0 +1,41 @@
+{
+  "_comment": "Gemini TTS Add-on Manifest - Configuration for AnkiWeb distribution",
+  
+  "name": "Gemini Speak",
+  "package": "Gemini Speak",
+  "ankiweb_id": "480539677",
+  "version": "2.0.0",
+  "author": "Jesus Heredia Ramirez",
+  
+  "description": "Professional Text-to-Speech using Google Gemini API. No external dependencies required. Works on all platforms including Linux Flatpak. Select text in editor and press Ctrl+G to generate natural-sounding speech in 30+ voices.",
+  
+  "homepage": "https://github.com/jrherediaramirez/Gemini-TTS-Anki",
+  
+  "_compatibility": "Compatibility settings for Anki versions",
+  "min_anki_version": "23.10",
+  "max_anki_version": "",
+  "conflicts": [],
+  
+  "_features": "Key features and search tags",
+  "tags": [
+    "tts", 
+    "text-to-speech", 
+    "gemini", 
+    "audio", 
+    "speech-synthesis", 
+    "google-ai",
+    "language-learning",
+    "accessibility",
+    "professional"
+  ],
+  
+  "_default_config": "Default configuration values for first-time users",
+  "config": {
+    "api_key": "",
+    "voice": "Zephyr",
+    "target_field": "Front",
+    "temperature": 0.0,
+    "enable_cache": true,
+    "cache_days": 30
+  }
+}
