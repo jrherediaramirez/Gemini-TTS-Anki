@@ -11,6 +11,7 @@ Features:
 - Voice selection from available options
 - Cache management controls
 - User-friendly error handling
+- Profile-aware instance management
 """
 
 from aqt import mw
@@ -31,14 +32,15 @@ def show_config_dialog():
     TTS engine is not available.
     """
     try:
-        # Import the GeminiTTS class from the same core package
-        from .tts_engine import GeminiTTS
+        # Get current profile's TTS instance using unified management
+        from .. import get_current_tts_instance, set_current_tts_instance
         
-        # Get or create TTS instance
-        tts_instance = getattr(mw, '_gemini_tts_instance', None)
+        tts_instance = get_current_tts_instance()
         if not tts_instance:
+            # Create new instance if none exists for current profile
+            from .tts_engine import GeminiTTS
             tts_instance = GeminiTTS()
-            mw._gemini_tts_instance = tts_instance
+            set_current_tts_instance(tts_instance)
         
         # Create and show dialog
         dialog = ConfigDialog(tts_instance)
@@ -312,20 +314,20 @@ class ConfigDialog(QDialog):
             QMessageBox.warning(self, "Error", "Please enter an API key first")
             return
         
-        # Create temporary TTS instance for testing
-        from .tts_engine import GeminiTTS
-        test_tts = GeminiTTS()
-        
-        # Configure test instance with current form values
+        # Use current TTS instance for testing with temporary config
         test_config = self.tts.config.copy()
         test_config["api_key"] = api_key
         test_config["voice"] = self.voice_combo.currentText()
-        test_tts.config = test_config
+        test_config["temperature"] = self.temp_spinner.value()
+        
+        # Temporarily update config for test
+        original_config = self.tts.config
+        self.tts.config = test_config
         
         try:
             # Test with short text to minimize API usage
             test_text = "Hello"
-            audio_data = test_tts.generate_audio_http(test_text)
+            audio_data = self.tts.generate_audio_http(test_text)
             
             # Check if reasonable amount of audio data was returned
             if len(audio_data) > 1000:
@@ -352,6 +354,10 @@ class ConfigDialog(QDialog):
                 )
             else:
                 QMessageBox.critical(self, "Error", f"API test failed:\n{error_msg}")
+        
+        finally:
+            # Restore original config
+            self.tts.config = original_config
     
     def cleanup_cache(self):
         """Clean up expired cache files and show results."""

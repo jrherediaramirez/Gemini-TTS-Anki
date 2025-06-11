@@ -7,6 +7,7 @@ Core functionality for Gemini TTS addon including:
 - TTS engine implementation
 - Configuration management
 - API integration
+- Profile-aware instance management
 
 This __init__.py file makes the core directory a proper Python package
 and provides clean imports for the main addon file.
