@@ -14,6 +14,7 @@ Features:
 """
 
 from aqt import mw
+from aqt.theme import theme_manager
 from aqt.qt import (QDialog, QVBoxLayout, QFormLayout, QLineEdit, QComboBox, 
                     QCheckBox, QPushButton, QSpinBox, QDoubleSpinBox, QMessageBox,
                     QHBoxLayout, QLabel)
@@ -183,12 +184,16 @@ class ConfigDialog(QDialog):
         # Configure info label appearance and behavior
         info_label.setOpenExternalLinks(True)
         info_label.setWordWrap(True)
+        
+        # Set background color based on Anki's theme for better visibility
+        bg_color = "#3a3a3a" if theme_manager.night_mode else "#f0f0f0"
+        
         info_label.setStyleSheet(
-            "QLabel { "
-            "background-color: #f0f0f0; "
-            "padding: 10px; "
-            "border-radius: 5px; "
-            "}"
+            f"QLabel {{ "
+            f"background-color: {bg_color}; "
+            f"padding: 10px; "
+            f"border-radius: 5px; "
+            f"}}"
         )
         
         parent_layout.addWidget(info_label)
