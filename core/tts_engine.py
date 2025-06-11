@@ -1,15 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-Gemini TTS Engine - Enhanced with Model Selection
-=================================================
+Gemini TTS Engine - Final Version
+=================================
 
 Main TTS engine using direct HTTP requests to Google's Gemini API.
 Handles audio generation, caching, model selection, and integration with Anki's editor.
-
-ENHANCEMENTS:
-- Model selection (Flash vs Pro)
-- Voice validation
-- Enhanced editor UI with model and voice dropdowns
 """
 
 import os
@@ -27,17 +22,11 @@ from typing import Optional, Dict, Any
 from functools import partial
 
 from aqt import mw
-from aqt.qt import QTimer, QComboBox, QHBoxLayout, QLabel
+from aqt.qt import QTimer
 from aqt.utils import tooltip
 
-# ============================================================================
-# MAIN TTS ENGINE CLASS
-# ============================================================================
-
 class GeminiTTS:
-    """
-    Main TTS engine class with model selection and enhanced UI.
-    """
+    """Main TTS engine class with model selection and enhanced UI."""
     
     def __init__(self):
         """Initialize the TTS engine with configuration and cache setup."""
@@ -112,20 +101,6 @@ class GeminiTTS:
             "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird", "Zubenelgenubi",
             "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat"
         ]
-    
-    def validate_current_settings(self) -> tuple[bool, str]:
-        """
-        Validate current model and voice settings.
-        
-        Returns:
-            Tuple of (is_valid, error_message)
-        """
-        try:
-            # Test with minimal text
-            test_audio = self.generate_audio_http("test")
-            return len(test_audio) > 1000, ""
-        except Exception as e:
-            return False, str(e)
     
     # ========================================================================
     # FIELD DETECTION
@@ -245,7 +220,6 @@ class GeminiTTS:
             max_age = self.config.get("cache_days", 30) * 24 * 3600
             
             if file_age > max_age:
-                # Remove from metadata and filesystem
                 del self.cache_metadata["files"][filename]
                 self.save_cache_metadata()
                 try:
@@ -256,7 +230,6 @@ class GeminiTTS:
         
         # Verify file actually exists
         if not os.path.exists(cache_file):
-            # Remove stale metadata entry
             if filename in self.cache_metadata["files"]:
                 del self.cache_metadata["files"][filename]
                 self.save_cache_metadata()
@@ -596,7 +569,7 @@ class GeminiTTS:
             # Create main TTS button with current settings in tooltip
             current_model = self.get_available_models()[self.config.get("model", "flash")]["display_name"]
             current_voice = self.config.get("voice", "Zephyr")
-            tip = f"Generate Gemini TTS (Ctrl+G)\nModel {current_model}\nVoice {current_voice}"
+            tip = f"Generate Gemini TTS (Ctrl+G)\nModel: {current_model}\nVoice: {current_voice}"
             
             button = editor.addButton(
                 icon=use_icon,
@@ -612,7 +585,7 @@ class GeminiTTS:
                 cmd="gemini_model",
                 tip=f"Select Gemini TTS Model (Current: {current_model})",
                 func=lambda ed: self.show_model_menu(ed),
-                label="Model"
+                label="Model:"
             )
             
             # Add voice selection button  
@@ -621,7 +594,7 @@ class GeminiTTS:
                 cmd="gemini_voice", 
                 tip=f"Select Gemini TTS Voice (Current: {current_voice})",
                 func=lambda ed: self.show_voice_menu(ed),
-                label="Voice"
+                label="Voice:"
             )
             
             buttons.append(button)
@@ -632,7 +605,7 @@ class GeminiTTS:
             print(f"Gemini TTS: Button setup error - {e}")
         
         return buttons
-    
+
     def show_model_menu(self, editor):
         """Show model selection menu."""
         from aqt.qt import QMenu, QCursor
@@ -647,7 +620,6 @@ class GeminiTTS:
             action.setChecked(model_key == current_model)
             action.triggered.connect(lambda checked, mk=model_key: self.change_model(mk, editor))
         
-        # Show menu at mouse cursor position
         menu.exec(QCursor.pos())
     
     def show_voice_menu(self, editor):
@@ -664,7 +636,6 @@ class GeminiTTS:
             action.setChecked(voice == current_voice)
             action.triggered.connect(lambda checked, v=voice: self.change_voice(v, editor))
         
-        # Show menu at mouse cursor position
         menu.exec(QCursor.pos())
     
     def change_model(self, model_key, editor):
@@ -680,28 +651,7 @@ class GeminiTTS:
         config["voice"] = voice
         self.save_config(config)
         tooltip(f"Voice changed to {voice}")
-    
-    def on_model_changed(self, combo):
-        """Handle model selection change."""
-        model_key = combo.currentData()
-        if model_key:
-            config = self.config.copy()
-            config["model"] = model_key
-            self.save_config(config)
-    
-    def on_voice_changed(self, combo):
-        """Handle voice selection change."""
-        voice_text = combo.currentText()
-        if voice_text.startswith("Voice: "):
-            voice = voice_text[7:]  # Remove "Voice: " prefix
-            config = self.config.copy()
-            config["voice"] = voice
-            self.save_config(config)
-    
-    # ========================================================================
-    # USER INTERACTION HANDLERS
-    # ========================================================================
-    
+
     def on_button_click(self, editor):
         """Handle TTS button click in editor."""
         js_code = """
